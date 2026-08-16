@@ -1,0 +1,11 @@
+target/
+project/target/
+project/project/
+*.jar
+.bsp/
+.metals/
+.bloop/
+metals.sbt
+.env
+*.class
+.DS_Store

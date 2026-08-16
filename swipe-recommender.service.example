@@ -1,0 +1,37 @@
+# Modèle d'unité systemd pour swipe-recommender.
+#
+# Ne PAS commiter de valeurs réelles dans un fichier versionné — ce dépôt est
+# public. `deploy-vps.sh --bootstrap` génère la vraie unité directement sur le
+# VPS en réutilisant les Environment= déjà en place sur rust-recommender.
+# Ce fichier n'est qu'une référence lisible de ce à quoi elle ressemble.
+#
+# Installation manuelle (si besoin, hors deploy-vps.sh) :
+#   sudo cp swipe-recommender.service.example /etc/systemd/system/swipe-recommender.service
+#   # puis éditer les Environment= ci-dessous avec les vraies valeurs
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now swipe-recommender
+
+[Unit]
+Description=twitninf swipe-recommender
+After=network.target postgresql.service redis-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/debian/swipe-recommender
+ExecStart=/usr/bin/java -Xmx512m -jar /home/debian/swipe-recommender/swipe-recommender.jar
+Environment=PORT=3003
+Environment=DB_HOST=localhost
+Environment=DB_PORT=5432
+Environment=DB_NAME=twitninf
+Environment=DB_USER=admin
+Environment=DB_PASSWORD=CHANGE_ME
+Environment=REDIS_HOST=localhost
+Environment=REDIS_PORT=6379
+Environment=REDIS_PASSWORD=CHANGE_ME
+Environment=INTERNAL_SECRET=CHANGE_ME
+Restart=always
+RestartSec=5
+User=debian
+
+[Install]
+WantedBy=multi-user.target
