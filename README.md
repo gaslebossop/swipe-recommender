@@ -51,9 +51,34 @@ Ce service réutilise volontairement les **mêmes** `DB_*`/`REDIS_*`/
 
 Toutes les routes `/swipe/*` exigent l'en-tête `X-Service-Key`.
 
-## Poids de l'algorithme
+## L'algorithme
 
-Les poids par défaut des 5 dimensions sont codés en dur
+5 dimensions pondérées (`Scoring.scala`), chacune construite sur une
+technique éprouvée plutôt qu'une heuristique ad hoc :
+
+- **D1 — Graphe social** : indice d'**Adamic-Adar** (Adamic & Adar, 2003)
+  sur le graphe de suivi — les connexions communes sont pondérées par
+  l'inverse du degré de sortie de la connexion, pas comptées à plat. Une
+  personne que vous suivez qui ne suit que 20 comptes pèse bien plus dans
+  le score qu'une personne qui en suit 5000 — même famille de signal que le
+  "Who To Follow" historique de Twitter (SALSA sur un cercle de confiance).
+  Bonus si le candidat vous suit déjà (réciprocité) ou si une conversation
+  existe déjà entre vous.
+- **D2 — Intérêts** : recouvrement des **hashtags** utilisés (signal
+  structuré) en priorité, bio en appoint, ville identique en petit bonus.
+- **D3 — Comportement** : engagement RÉEL (tables `tweet_likes`/
+  `tweet_retweets`/réponses — pas le tracking comportemental, sparse côté
+  web) + un signal de **filtrage collaboratif utilisateur** : combien
+  d'autres comptes ayant aimé les mêmes tweets que vous suivent aussi ce
+  candidat.
+- **D4 — Qualité** : popularité (abonnés) ET taux d'engagement réel
+  (moyenne likes+retweets sur les 50 derniers tweets) — un gros compte
+  inactif ne domine pas un petit compte qui engage vraiment. Pénalisé par
+  une modération active (ban/suspend/warn).
+- **D5 — Fraîcheur** : pénalise les comptes dormants, léger boost cold-start
+  pour un compte récent.
+
+Les poids par défaut de ces 5 dimensions sont codés en dur
 (`AlgoWeights.default` dans `Models.scala`) mais peuvent être surchargés
 sans redéploiement via la clé Redis `swipe:algo:weights` (JSON avec les
 clés `d1_social`, `d2_interests`, `d3_behavior`, `d4_quality`,

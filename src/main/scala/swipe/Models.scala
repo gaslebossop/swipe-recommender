@@ -22,11 +22,27 @@ final case class CandidateRow(
   lastActivity: Option[Instant],
   followsMeBack: Boolean,
   mutualFollowersCount: Int,
+  /** Indice d'Adamic-Adar sur le graphe de suivi (voir Db.scala) — connexions
+    * communes pondérées par l'inverse du degré de sortie de la connexion,
+    * pas un simple compte brut. */
+  adamicAdarScore: Double,
   recentModerationHits: Int,
-  behaviorAffinityRaw: Double
+  /** Likes/retweets/réponses RÉELS que j'ai adressés à son contenu (tables
+    * tweet_likes/tweet_retweets/tweets), pas des événements de tracking. */
+  engagementDirect: Double,
+  /** Filtrage collaboratif : combien d'autres comptes ayant aimé les mêmes
+    * tweets que moi suivent aussi ce candidat. */
+  cfPeerCount: Int,
+  /** Engagement moyen (likes+retweets) sur ses 50 derniers tweets — mesure
+    * la qualité réelle du compte, pas seulement son nombre d'abonnés. */
+  avgEngagementPerTweet: Double,
+  /** Une conversation existe déjà entre nous — relation réelle, indépendante
+    * du graphe de suivi. */
+  hasConversation: Boolean,
+  hashtags: Set[String]
 )
 
-final case class SelfProfile(bio: Option[String], city: Option[String])
+final case class SelfProfile(bio: Option[String], city: Option[String], hashtags: Set[String])
 
 /** Candidat scoré, tel que renvoyé au client (Node) et mis en cache dans Redis. */
 final case class ScoredCandidate(

@@ -6,13 +6,18 @@ import java.time.Instant
 class ScoringSpec extends FunSuite:
   private def candidate(
     mutualFollowers: Int = 0,
+    adamicAdar: Double = 0.0,
     followsMeBack: Boolean = false,
+    hasConversation: Boolean = false,
     followers: Int = 100,
     verified: Boolean = false,
     moderationHits: Int = 0,
-    behaviorAffinity: Double = 0.0,
+    engagementDirect: Double = 0.0,
+    cfPeerCount: Int = 0,
+    avgEngagementPerTweet: Double = 0.0,
     bio: Option[String] = None,
     city: Option[String] = None,
+    hashtags: Set[String] = Set.empty,
     lastActivity: Option[Instant] = Some(Instant.now())
   ): CandidateRow = CandidateRow(
     id = "candidate-1",
@@ -30,11 +35,16 @@ class ScoringSpec extends FunSuite:
     lastActivity = lastActivity,
     followsMeBack = followsMeBack,
     mutualFollowersCount = mutualFollowers,
+    adamicAdarScore = adamicAdar,
     recentModerationHits = moderationHits,
-    behaviorAffinityRaw = behaviorAffinity
+    engagementDirect = engagementDirect,
+    cfPeerCount = cfPeerCount,
+    avgEngagementPerTweet = avgEngagementPerTweet,
+    hasConversation = hasConversation,
+    hashtags = hashtags
   )
 
-  private val self = SelfProfile(bio = Some("passionné de tech et de café"), city = Some("Paris"))
+  private val self = SelfProfile(bio = Some("passionné de tech et de café"), city = Some("Paris"), hashtags = Set("#scala", "#twitninf"))
   private val now = Instant.now()
 
   test("un candidat qui suit déjà l'utilisateur obtient un D1 nettement supérieur") {
@@ -43,22 +53,46 @@ class ScoringSpec extends FunSuite:
     assert(reciprocal.d1 > plain.d1)
   }
 
-  test("des abonnés communs font monter le D1") {
-    val none = Scoring.dimensions(self, candidate(mutualFollowers = 0), now)
-    val some = Scoring.dimensions(self, candidate(mutualFollowers = 5), now)
-    assert(some.d1 > none.d1)
+  test("une conversation existante fait monter le D1") {
+    val none = Scoring.dimensions(self, candidate(), now)
+    val withConvo = Scoring.dimensions(self, candidate(hasConversation = true), now)
+    assert(withConvo.d1 > none.d1)
   }
 
-  test("une bio partagée fait monter le D2") {
-    val unrelated = Scoring.dimensions(self, candidate(bio = Some("photographie animalière")), now)
-    val related = Scoring.dimensions(self, candidate(bio = Some("tech et café tous les jours")), now)
-    assert(related.d2 > unrelated.d2)
+  test("un indice d'Adamic-Adar plus élevé fait monter le D1") {
+    val weak = Scoring.dimensions(self, candidate(adamicAdar = 0.1), now)
+    val strong = Scoring.dimensions(self, candidate(adamicAdar = 1.5), now)
+    assert(strong.d1 > weak.d1)
+  }
+
+  test("des hashtags partagés font monter le D2 plus qu'un simple recouvrement de bio") {
+    val unrelated = Scoring.dimensions(self, candidate(bio = Some("photographie animalière"), hashtags = Set("#photo")), now)
+    val sharedTags = Scoring.dimensions(self, candidate(bio = Some("photographie animalière"), hashtags = Set("#scala", "#twitninf")), now)
+    assert(sharedTags.d2 > unrelated.d2)
   }
 
   test("une ville identique fait monter le D2") {
     val elsewhere = Scoring.dimensions(self, candidate(city = Some("Lyon")), now)
     val same = Scoring.dimensions(self, candidate(city = Some("paris")), now)
     assert(same.d2 > elsewhere.d2)
+  }
+
+  test("l'engagement direct réel fait monter le D3") {
+    val none = Scoring.dimensions(self, candidate(engagementDirect = 0.0), now)
+    val engaged = Scoring.dimensions(self, candidate(engagementDirect = 15.0), now)
+    assert(engaged.d3 > none.d3)
+  }
+
+  test("le filtrage collaboratif (pairs aux goûts similaires) fait monter le D3") {
+    val none = Scoring.dimensions(self, candidate(cfPeerCount = 0), now)
+    val withPeers = Scoring.dimensions(self, candidate(cfPeerCount = 8), now)
+    assert(withPeers.d3 > none.d3)
+  }
+
+  test("un taux d'engagement réel plus élevé fait monter le D4, à popularité égale") {
+    val deadAccount = Scoring.dimensions(self, candidate(followers = 500, avgEngagementPerTweet = 0.0), now)
+    val engagingAccount = Scoring.dimensions(self, candidate(followers = 500, avgEngagementPerTweet = 20.0), now)
+    assert(engagingAccount.d4 > deadAccount.d4)
   }
 
   test("une pénalité de modération récente fait baisser le D4") {
@@ -76,7 +110,11 @@ class ScoringSpec extends FunSuite:
   test("toutes les dimensions restent dans [0, 1] même aux extrêmes") {
     val d = Scoring.dimensions(
       self,
-      candidate(mutualFollowers = 50, followsMeBack = true, followers = 5_000_000, verified = true, behaviorAffinity = 999),
+      candidate(
+        mutualFollowers = 50, adamicAdar = 999.0, followsMeBack = true, hasConversation = true,
+        followers = 5_000_000, verified = true, engagementDirect = 999.0, cfPeerCount = 999,
+        avgEngagementPerTweet = 99999.0, hashtags = self.hashtags
+      ),
       now
     )
     List(d.d1, d.d2, d.d3, d.d4, d.d5).foreach { v =>
@@ -85,7 +123,7 @@ class ScoringSpec extends FunSuite:
   }
 
   test("le score pondéré par défaut reste dans [0, 1]") {
-    val d = Scoring.dimensions(self, candidate(mutualFollowers = 3), now)
+    val d = Scoring.dimensions(self, candidate(adamicAdar = 0.3), now)
     val score = Scoring.weightedScore(d, AlgoWeights.default)
     assert(score >= 0.0 && score <= 1.0)
   }

@@ -35,22 +35,58 @@ final class Db(cfg: Config):
       finally st.close()
     }.handleError(_ => false)
 
+  private def textArray(rs: ResultSet, col: String): Set[String] =
+    val arr = rs.getArray(col)
+    if arr == null then Set.empty
+    else arr.getArray.asInstanceOf[Array[AnyRef]].iterator.map(_.toString).toSet
+
+  private val hashtagsSql =
+    """
+      |SELECT DISTINCT tag
+      |FROM tweets t
+      |CROSS JOIN LATERAL jsonb_array_elements_text(t.hashtags) AS tag
+      |WHERE t.user_id = ?::uuid
+      |LIMIT 300
+      |""".stripMargin
+
   def selfProfile(userId: String): IO[SelfProfile] =
     withConnection { conn =>
       val ps = conn.prepareStatement("SELECT bio, city FROM users WHERE id = ?::uuid")
-      try
-        ps.setString(1, userId)
-        val rs = ps.executeQuery()
+      val (bio, city) =
         try
-          if rs.next() then SelfProfile(Option(rs.getString("bio")), Option(rs.getString("city")))
-          else SelfProfile(None, None)
-        finally rs.close()
-      finally ps.close()
+          ps.setString(1, userId)
+          val rs = ps.executeQuery()
+          try
+            if rs.next() then (Option(rs.getString("bio")), Option(rs.getString("city")))
+            else (None, None)
+          finally rs.close()
+        finally ps.close()
+
+      val hashtags = scala.collection.mutable.Set.empty[String]
+      val hps = conn.prepareStatement(hashtagsSql)
+      try
+        hps.setString(1, userId)
+        val hrs = hps.executeQuery()
+        try while hrs.next() do hashtags += hrs.getString("tag")
+        finally hrs.close()
+      finally hps.close()
+
+      SelfProfile(bio, city, hashtags.toSet)
     }
 
   // Filtres durs déjà appliqués ici (hors base : suspendu/inactif/déjà en
   // relation) — le cooldown "pass" (Redis) est filtré séparément par Routes,
   // il ne concerne pas Postgres.
+  //
+  // Les signaux ci-dessous s'appuient sur les tables de vérité (tweet_likes,
+  // tweet_retweets, conversation_participants) plutôt que sur
+  // user_behavior_data : ce dernier dépend du client et est quasi vide côté
+  // web (voir mémoire neuralrank-recommender — 51 comptes web sur 52
+  // n'émettent aucun événement). Le graphe social utilise un indice
+  // d'Adamic-Adar (connexions communes pondérées par l'inverse de leur
+  // degré de sortie) plutôt qu'un simple compte brut — technique standard
+  // de prédiction de lien (Adamic & Adar 2003), même famille que le "Who To
+  // Follow" historique de Twitter.
   private val candidateSql =
     """
       |SELECT u.id, u.username, u.full_name, u.avatar, u.bio, u.city, u.verified,
@@ -69,31 +105,58 @@ final class Db(cfg: Config):
       |         WHERE mf1.follower_id = ?::uuid AND mf1.status = 'active'
       |           AND mf2.follower_id = u.id AND mf2.status = 'active'
       |       ) AS mutual_followers_count,
+      |       COALESCE((
+      |         SELECT SUM(1.0 / LN(2 + COALESCE((common_u.stats->>'following')::numeric, 0)))
+      |         FROM user_follows mf
+      |         JOIN users common_u ON common_u.id = mf.following_id
+      |         JOIN user_follows uf2 ON uf2.follower_id = common_u.id AND uf2.following_id = u.id AND uf2.status = 'active'
+      |         WHERE mf.follower_id = ?::uuid AND mf.status = 'active'
+      |       ), 0) AS adamic_adar_score,
       |       (
       |         SELECT COUNT(*) FROM moderation_actions ma
       |         WHERE ma.target_type = 'user' AND ma.target_id = u.id
       |           AND ma.type IN ('ban', 'suspend', 'warn') AND ma.status = 'active'
       |       ) AS recent_moderation_hits,
       |       COALESCE((
-      |         SELECT SUM(CASE ubd.action_type
-      |                      WHEN 'profile_view' THEN 0.5
-      |                      WHEN 'user_follow'   THEN 2.0
-      |                      ELSE 0 END)
-      |         FROM user_behavior_data ubd
-      |         WHERE ubd.user_id = ?::uuid AND ubd.target_type = 'user' AND ubd.target_id = u.id::text
+      |         SELECT COUNT(*) * 3.0 FROM tweet_likes tl JOIN tweets t1 ON t1.id = tl.tweet_id
+      |         WHERE tl.user_id = ?::uuid AND t1.user_id = u.id
       |       ), 0)
-      |       +
+      |       + COALESCE((
+      |         SELECT COUNT(*) * 5.0 FROM tweet_retweets tr JOIN tweets t2 ON t2.id = tr.tweet_id
+      |         WHERE tr.user_id = ?::uuid AND t2.user_id = u.id
+      |       ), 0)
+      |       + COALESCE((
+      |         SELECT COUNT(*) * 4.0 FROM tweets rep JOIN tweets orig ON orig.id = rep.original_tweet_id
+      |         WHERE rep.user_id = ?::uuid AND rep.tweet_type = 'reply' AND orig.user_id = u.id
+      |       ), 0) AS engagement_direct,
       |       COALESCE((
-      |         SELECT SUM(CASE ubd2.action_type
-      |                      WHEN 'tweet_like'    THEN 3.0
-      |                      WHEN 'tweet_retweet' THEN 5.0
-      |                      WHEN 'tweet_reply'   THEN 4.0
-      |                      WHEN 'tweet_view'    THEN 1.0
-      |                      ELSE 0 END)
-      |         FROM user_behavior_data ubd2
-      |         JOIN tweets t ON t.id::text = ubd2.target_id
-      |         WHERE ubd2.user_id = ?::uuid AND ubd2.target_type = 'tweet' AND t.user_id = u.id
-      |       ), 0) AS behavior_affinity_raw
+      |         SELECT COUNT(DISTINCT peer.user_id)
+      |         FROM tweet_likes mine
+      |         JOIN tweet_likes peer ON peer.tweet_id = mine.tweet_id AND peer.user_id <> mine.user_id
+      |         JOIN user_follows pf ON pf.follower_id = peer.user_id AND pf.following_id = u.id AND pf.status = 'active'
+      |         WHERE mine.user_id = ?::uuid
+      |       ), 0) AS cf_peer_count,
+      |       COALESCE((
+      |         SELECT AVG(
+      |           (SELECT COUNT(*) FROM tweet_likes tl3 WHERE tl3.tweet_id = ct.id) +
+      |           (SELECT COUNT(*) FROM tweet_retweets tr3 WHERE tr3.tweet_id = ct.id)
+      |         )
+      |         FROM (
+      |           SELECT id FROM tweets WHERE user_id = u.id AND parent_tweet_id IS NULL
+      |           ORDER BY created_at DESC LIMIT 50
+      |         ) ct
+      |       ), 0) AS avg_engagement_per_tweet,
+      |       EXISTS(
+      |         SELECT 1 FROM conversation_participants cp1
+      |         JOIN conversation_participants cp2 ON cp2.conversation_id = cp1.conversation_id AND cp2.user_id = u.id
+      |         WHERE cp1.user_id = ?::uuid
+      |       ) AS has_conversation,
+      |       (
+      |         SELECT COALESCE(array_agg(DISTINCT tag), ARRAY[]::text[])
+      |         FROM tweets ht
+      |         CROSS JOIN LATERAL jsonb_array_elements_text(ht.hashtags) AS tag
+      |         WHERE ht.user_id = u.id
+      |       ) AS candidate_hashtags
       |FROM users u
       |WHERE u.id <> ?::uuid
       |  AND u.is_active = true
@@ -111,9 +174,10 @@ final class Db(cfg: Config):
     withConnection { conn =>
       val ps = conn.prepareStatement(candidateSql)
       try
-        // 6 occurrences de userId dans la requête, puis LIMIT.
-        for i <- 1 to 6 do ps.setString(i, userId)
-        ps.setInt(7, limit)
+        // 10 occurrences de userId dans la requête (voir l'ordre des `?`
+        // ci-dessus), puis LIMIT.
+        for i <- 1 to 10 do ps.setString(i, userId)
+        ps.setInt(11, limit)
         val rs = ps.executeQuery()
         try
           val buf = scala.collection.mutable.ListBuffer.empty[CandidateRow]
@@ -146,6 +210,11 @@ final class Db(cfg: Config):
       lastActivity = instantOpt("last_activity"),
       followsMeBack = rs.getBoolean("follows_me_back"),
       mutualFollowersCount = rs.getInt("mutual_followers_count"),
+      adamicAdarScore = rs.getDouble("adamic_adar_score"),
       recentModerationHits = rs.getInt("recent_moderation_hits"),
-      behaviorAffinityRaw = rs.getDouble("behavior_affinity_raw")
+      engagementDirect = rs.getDouble("engagement_direct"),
+      cfPeerCount = rs.getInt("cf_peer_count"),
+      avgEngagementPerTweet = rs.getDouble("avg_engagement_per_tweet"),
+      hasConversation = rs.getBoolean("has_conversation"),
+      hashtags = textArray(rs, "candidate_hashtags")
     )
