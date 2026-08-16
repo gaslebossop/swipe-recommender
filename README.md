@@ -29,7 +29,7 @@ a déjà OpenJDK 21 installé.
 
 | Variable | Description | Défaut |
 |---|---|---|
-| `PORT` | Port d'écoute HTTP | `3003` |
+| `PORT` | Port d'écoute HTTP | `3005` |
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | Connexion Postgres | `DB_PASSWORD` obligatoire |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | Connexion Redis | `REDIS_PASSWORD` optionnel |
 | `INTERNAL_SECRET` | Secret partagé attendu dans `X-Service-Key` | obligatoire |

@@ -55,4 +55,4 @@ jobs:
           sleep 5
           ssh -i ~/.ssh/vps_key -o StrictHostKeyChecking=accept-new \
             "debian@${{ secrets.VPS_HOST }}" \
-            "curl -sf --max-time 5 http://127.0.0.1:3003/health"
+            "curl -sf --max-time 5 http://127.0.0.1:3005/health"

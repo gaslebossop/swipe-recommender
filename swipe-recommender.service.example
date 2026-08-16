@@ -19,7 +19,7 @@ After=network.target postgresql.service redis-server.service
 Type=simple
 WorkingDirectory=/home/debian/swipe-recommender
 ExecStart=/usr/bin/java -Xmx512m -jar /home/debian/swipe-recommender/swipe-recommender.jar
-Environment=PORT=3003
+Environment=PORT=3005
 Environment=DB_HOST=localhost
 Environment=DB_PORT=5432
 Environment=DB_NAME=twitninf

@@ -18,7 +18,7 @@ object Main extends IOApp:
     EmberServerBuilder
       .default[IO]
       .withHost(host"0.0.0.0")
-      .withPort(Port.fromInt(cfg.port).getOrElse(port"3003"))
+      .withPort(Port.fromInt(cfg.port).getOrElse(port"3005"))
       .withHttpApp(app)
       .build
       .use { server =>

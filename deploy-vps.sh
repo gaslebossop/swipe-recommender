@@ -22,7 +22,7 @@ VPS_HOST="${VPS_HOST:-debian@51.210.11.74}"
 VPS_KEY="${VPS_KEY:-C:\\Users\\nouno\\OneDrive\\Bureau\\Documents\\privatessh}"
 REMOTE_DIR="${REMOTE_DIR:-/home/debian/swipe-recommender}"
 SERVICE="${SERVICE:-swipe-recommender}"
-HEALTH_URL="http://127.0.0.1:3003/health"
+HEALTH_URL="http://127.0.0.1:3005/health"
 
 ssh_vps() { ssh -i "$VPS_KEY" -o StrictHostKeyChecking=accept-new "$VPS_HOST" "$@"; }
 scp_vps() { scp -i "$VPS_KEY" -o StrictHostKeyChecking=accept-new "$@"; }
@@ -32,7 +32,7 @@ die() { printf '\n\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
 check_health() {
   log "Contrôle de santé"
-  ssh_vps "ss -tlnp 2>/dev/null | grep -q ':3003' || { echo 'rien n écoute sur 3003'; exit 1; }"
+  ssh_vps "ss -tlnp 2>/dev/null | grep -q ':3005' || { echo 'rien n écoute sur 3005'; exit 1; }"
 
   local health
   health="$(ssh_vps "curl -s --max-time 5 '$HEALTH_URL'")" || die "/health injoignable"
@@ -80,7 +80,7 @@ Type=simple
 WorkingDirectory=$REMOTE_DIR
 ExecStart=/usr/bin/java -Xmx512m -jar $REMOTE_DIR/swipe-recommender.jar
 $ENV_LINES
-Environment=PORT=3003
+Environment=PORT=3005
 Restart=always
 RestartSec=5
 User=debian
